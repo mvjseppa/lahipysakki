@@ -12,7 +12,6 @@ import React, { useEffect, useState } from 'react';
 import {
   FlatList,
   SafeAreaView,
-  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -23,14 +22,14 @@ import {
 import {
   Colors,
   DebugInstructions,
-  Header,
-  LearnMoreLinks,
   ReloadInstructions,
 } from 'react-native/Libraries/NewAppScreen'
 
 import GetLocation from 'react-native-get-location'
 
-import { ApolloClient, InMemoryCache, ApolloProvider, gql, useQuery } from '@apollo/client'
+import { ApolloClient, InMemoryCache, ApolloProvider, useQuery } from '@apollo/client'
+
+import {getStopDetailsQuery, getStopsByRadiusQuery, HslArrivalQueryResponse, HslNode, HslStopsByRadius} from './hslapi'
 
 // Initialize Apollo Client
 const client = new ApolloClient({
@@ -38,9 +37,12 @@ const client = new ApolloClient({
   cache: new InMemoryCache()
 })
 
-const Section: React.FC<{
-  title: string;
-}> = ({ children, title }) => {
+type SectionProps = {
+  children: React.ReactNode,
+  title: string
+}
+
+const Section = ({ children, title }: SectionProps) => {
   const isDarkMode = useColorScheme() === 'dark';
   return (
     <View style={styles.sectionContainer}>
@@ -66,7 +68,7 @@ const Section: React.FC<{
   );
 };
 
-const NearestBusStops: React.FC = () => {
+const NearestBusStops = () => {
   const [location, setLocation] = React.useState<GetLocation.Location | undefined>(undefined)
 
   React.useEffect(() => {
@@ -83,77 +85,47 @@ const NearestBusStops: React.FC = () => {
 
   if(!location) return <Text>Loading ...</Text>
 
-  return (<BusStops latitude={location?.latitude} longitude={location?.longitude}/>)
+  return (<BusStops location={location}/>)
 }
 
-const BusStops: React.FC<{latitude: number, longitude: number}> = ({latitude, longitude}) => {
-  const query = gql`
-    query { 
-        stopsByRadius(lat:${latitude}, lon:${longitude}, radius:500) {
-        edges {
-          node {
-            stop {
-              gtfsId
-              name
-            }
-            distance
-          }
-        }
-      }
-    }
-  `
+type BusStopsProps = {
+  location: GetLocation.Location
+}
 
-  
-  const { loading, error, data } = useQuery(query, {pollInterval: 60000});
+const BusStops = ({location}: BusStopsProps) => {
+  const query = getStopsByRadiusQuery(location.latitude, location.longitude)
+  const { loading, error, data } = useQuery<HslStopsByRadius>(query, {pollInterval: 60000});
 
   if (loading) return <Text>Loading...</Text>   
-  if (error) return <Text>Error {error}</Text>  
+  if (error || data == undefined) return <Text>Error {error}</Text>  
 
   return (
       <FlatList 
         style={styles.flatList}
         data={data.stopsByRadius.edges.slice(0,4)} 
-        renderItem = {({item}) => <StopDetails stopId={item.node.stop.gtfsId} distance={item.node.distance}/>}
+        renderItem = {({item}) => <StopDetails node={item.node}/>}
         keyExtractor={(item, index) => item.node.stop.gtfsId}
       />
   )
 }
 
-const StopDetails: React.FC<{stopId: string, distance: number}> = ({stopId, distance}) => {
-  const query = gql`
-    query {
-      stop(id: "${stopId}") {
-        name
-          stoptimesWithoutPatterns {
-          scheduledArrival
-          realtimeArrival
-          arrivalDelay
-          scheduledDeparture
-          realtimeDeparture
-          departureDelay
-          realtime
-          realtimeState
-          serviceDay
-          headsign
-          trip{
-            routeShortName
-          }
-        }
-      }  
-    }
-  `
+type StopDetailsProps = {
+  node: HslNode
+}
 
-  const { loading, error, data } = useQuery(query, {pollInterval: 20000});
+const StopDetails = ({ node }: StopDetailsProps) => {
+  const query = getStopDetailsQuery(node.stop.gtfsId)
+  const { loading, error, data } = useQuery<HslArrivalQueryResponse>(query, {pollInterval: 20000});
 
   if (loading) return <Text>Loading...</Text>
-  if (error) return <Text>Error {error}</Text>
+  if (error || data == undefined) return <Text>Error {error}</Text>
   
   const stopData = data.stop.stoptimesWithoutPatterns[0]
   const waitTime = (stopData.realtimeArrival + stopData.serviceDay - Date.now() / 1000)
 
   return (
     <View style={styles.sectionContainer}>
-      <Text>{data.stop.name} ({distance} m)</Text>
+      <Text>{data.stop.name} ({node.distance} m)</Text>
       <View style={{flexDirection: 'row'}}>
         <Text style={styles.sectionTitle}>{stopData.trip.routeShortName}</Text>
         <Timer startTime={waitTime}/>
@@ -162,7 +134,9 @@ const StopDetails: React.FC<{stopId: string, distance: number}> = ({stopId, dist
   )
 }
 
-const Timer: React.FC<{startTime: number}> = ({startTime}) => {
+type TimerProps = {startTime: number}
+
+const Timer = ({startTime}: TimerProps) => {
   const [time, setTime] = useState<number>(startTime)
 
   useEffect(() => {
